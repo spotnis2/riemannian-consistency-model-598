@@ -1,0 +1,13 @@
+**/*.log
+**/*.err
+**/*.csv
+**/*.cif
+**/*.fa
+**/__pycache__
+.idea/
+logs_train/
+logs_sample/
+samples/
+**/*.png
+**/*.pdb
+
