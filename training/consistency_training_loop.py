@@ -56,7 +56,7 @@ def training_loop(
 ):
 
     def protein_graph_conditioning(batch):
-        bb_dihedrals, pos, aa_onehot, aa_mask = batch.bb_dihedral, batch.pos, batch.aa_onehot, batch.aa_mask.float()
+        bb_dihedrals, pos, aa_onehot, aa_m = batch.bb_dihedral, batch.pos, batch.aa_onehot, batch.aa_mask.float()
 
         pos_flat = pos.reshape(pos.shape[0], -1)
 
@@ -72,7 +72,7 @@ def training_loop(
         sums = torch.zeros(num_graphs, dfeat, device=dev, dtype=dty)
         counts = torch.zeros(num_graphs, device=dev, dtype=dty)
         sums.index_add_(0, bidx, initial_cond * aa_m.unsqueeze(-1))
-        counts.index_add_(0, bidx, aa_mask)
+        counts.index_add_(0, bidx, aa_m)
         mean_pool = sums / counts.clamp(min=1e-8).unsqueeze(-1)
         node_count = torch.log1p(counts).unsqueeze(-1)
 
