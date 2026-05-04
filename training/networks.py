@@ -82,7 +82,7 @@ class MPModel(nn.Module):
 
         self.out_conv = MPConv(2 * self.x_channel[0], in_channels, kernel=[])
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.cond_projector = nn.Linear(in_features=71, out_features=emb_channel)
+        self.cond_projector = nn.Linear(in_features=71, out_features=self.emb_channel)
         
     def forward(self, x, cond, noise_labels):  #forward(self, x, cond, noise_labels) 
         #cond shape: [N, 71]
@@ -124,11 +124,17 @@ class FlowPrecond(torch.nn.Module):
         self.model = MPModel(in_channels, **model_kwargs)
 
     def forward(self, x, cond, t):
+        squeeze_mid = x.ndim == 2
+        if squeeze_mid:
+            x = x.unsqueeze(1)
         F_x = self.model(x, cond, t.flatten())
+        if squeeze_mid:
+            F_x = F_x.squeeze(1)
         return F_x
 
 class FlowPackerWrapper(torch.nn.Module):
     def __init__(self):
+        super().__init__()
         ckpt_dict = torch.load("flowpacker/checkpoints/cluster.pth")
         train_cfg = ckpt_dict['config']
         self.model = CNF(EquiformerV2(**train_cfg.model), train_cfg, coeff=5.0,

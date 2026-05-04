@@ -319,6 +319,9 @@ class Torus(Manifold):
     
     @classmethod
     def inner_with_mask(cls, u: Tensor, v: Tensor, x: Tensor, mask: Tensor, eps=_EPS) -> Tensor:
+        print(u.shape)
+        print(v.shape)
+        print(mask.shape)
         return (u * v * mask).sum(-1) / mask.sum(-1).clamp(1)
 
     @classmethod

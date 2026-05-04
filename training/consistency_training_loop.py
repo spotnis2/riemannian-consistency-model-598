@@ -25,7 +25,7 @@ from torch_utils import distributed as dist
 from torch_utils import misc, training_stats
 from flowpacker.dataset_cluster import ProteinDataset
 
-from networks import FlowPackerWrapper
+from training.networks import FlowPackerWrapper
 
 #----------------------------------------------------------------------------
 
@@ -90,6 +90,7 @@ def training_loop(
 
         cond_vector = torch.cat([mean_pool, node_count, edge_count], dim=-1)
 
+        print(cond_vector.shape)
         return cond_vector
 
     # Initialize.
@@ -112,7 +113,7 @@ def training_loop(
     dist.print0('Loading dataset...')
     dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # subclass of training.dataset.Dataset
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed)
-    if dataset_obj.class_name == 'flowpacker.dataset_cluster.ProteinDataset':
+    if isinstance(dataset_obj, ProteinDataset):
         dataset_iterator = iter(PyGDataLoader(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
     else:
         dataset_iterator = iter(torch.utils.data.DataLoader(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
@@ -125,7 +126,7 @@ def training_loop(
         with torch.no_grad():
             images = torch.zeros([batch_gpu, 1, net.in_channels], device=device)
             sigma = torch.ones([batch_gpu], device=device)
-            misc.print_module_summary(net, [images, sigma], max_nesting=2)
+            # misc.print_module_summary(net, [images, sigma], max_nesting=2)
 
     # Setup teacher model if we need it
     teacher_net = None 
@@ -136,7 +137,7 @@ def training_loop(
 
         # Load network.
         dist.print0(f'Loading teacher network from "{loss_kwargs.teacher_model}"...')
-        if dataset_obj.class_name == 'flowpacker.dataset_cluster.ProteinDataset':
+        if isinstance(dataset_obj, ProteinDataset):
             teacher_net = FlowPackerWrapper()
         else:
             with dnnlib.util.open_url(loss_kwargs.teacher_model, verbose=(dist.get_rank() == 0)) as f:
@@ -200,6 +201,7 @@ def training_loop(
                 cond_graph = protein_graph_conditioning(batch) 
                 cond = cond_graph[batch.batch]
                 loss = loss_fn(net=ddp, x=batch.chi, x_mask=batch.chi_mask, cond=cond, batch=batch, iter_steps=int(cur_nimg // batch_size))
+                print("RETURN VALUE FROM LOSS FUNCTION", loss)
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
 

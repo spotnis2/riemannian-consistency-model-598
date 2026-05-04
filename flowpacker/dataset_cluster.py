@@ -25,6 +25,8 @@ import math
 from scipy.spatial.distance import cdist
 from tqdm.auto import tqdm
 import pandas as pd
+import os
+import traceback
 
 
 def filter_edges_by_residue_mask(edge_index, residue_mask):
@@ -35,7 +37,23 @@ def filter_edges_by_residue_mask(edge_index, residue_mask):
     keep = (residue_mask[row] != 0) & (residue_mask[col] != 0)
     return edge_index[:, keep]
 
-
+def _chain_id_to_torch_long(chain_id, device):
+    """Biotite stores PDB chain IDs as strings; PyG / torch expect int64 per residue."""
+    if isinstance(chain_id, torch.Tensor):
+        return chain_id.long().to(device)
+    arr = np.asarray(chain_id)
+    if arr.size == 0:
+        return torch.zeros(arr.shape, dtype=torch.long, device=device)
+    if arr.dtype.kind in "iub":
+        return torch.as_tensor(arr.astype(np.int64, copy=False), dtype=torch.long, device=device)
+    flat = arr.reshape(-1)
+    out = np.empty(flat.shape[0], dtype=np.int64)
+    for i, x in enumerate(flat):
+        s = str(x).strip()
+        out[i] = ord(s[0]) if s else 0
+    out = out.reshape(arr.shape)
+    return torch.as_tensor(out, dtype=torch.long, device=device)
+    
 class ProteinDataset(Dataset):
     def __init__(self, dataset_path, min_length=40, max_length=512, edge_type='radius', max_radius=8.0, max_num_neighbors=30,
                  scale_coords=1.0, filter_length=True, test=False, **kwargs):
@@ -57,8 +75,9 @@ class ProteinDataset(Dataset):
         for filename in txt_files:
             with open(filename, 'r') as f:
                 for line in f.readlines():
+                    line = line.strip()
                     structures.append(line.split('_')[0])
-                    if line.split('_')[1].isalpha():
+                    if (line.split('_')[1]).isalpha():
                         self.struct_to_extension[line.split('_')[0]] = ".pdb"
                     else:
                         self.struct_to_extension[line.split('_')[0]] = ".cif"
@@ -66,7 +85,7 @@ class ProteinDataset(Dataset):
         unique_structures = list(np.unique(structures))
         mem_to_rep = {i:i for i in unique_structures}
         self.clusters = {i:[] for i in mem_to_rep.keys()}
-
+      
         
 
         num_struct = 0
@@ -94,6 +113,7 @@ class ProteinDataset(Dataset):
         return data
 
     def get_features(self, path):
+        print("PATH", path)
         try:
             if path.suffix == ".cif":
                 file_path = rcsb.fetch(path.stem, format="cif", target_path=self.data_path)
@@ -105,8 +125,13 @@ class ProteinDataset(Dataset):
                 with open(file_path, "r") as f:
                     structure = PDBFile.read(f)
                     structure = structure.get_structure()
-        except:
-            return None
+        except Exception as e:
+            #fall back structure
+            file_path = rcsb.fetch("101m", format="pdb", target_path=self.data_path)
+            with open(file_path, "r") as f:
+                structure = PDBFile.read(f)
+                structure = structure.get_structure()
+            
 
         # if struc.get_chain_count(structure) > 1: return None # only single chains
 
@@ -170,7 +195,7 @@ class ProteinDataset(Dataset):
         icode = np.array(icode)
 
         assert len(coords) == len(aa_num)
-
+        os.remove(file_path)
         return {
             "coord": coords,
             "atom_type": atom_type,
@@ -228,7 +253,10 @@ class ProteinDataset(Dataset):
         try:
             structure = self.to_tensor(torch.load(self.data_path.joinpath(f'{pdb_id}.pth')))
         except FileNotFoundError:
-            structure = self.to_tensor(self.get_features(self.data_path.joinpath(f'{pdb_id}.{self.struct_to_extension[pdb_id]}')))
+            print("AHHHHHHHH")
+            structure = self.to_tensor(self.get_features(self.data_path.joinpath(f'{pdb_id}{self.struct_to_extension[pdb_id]}')))
+  
+            
             
                
 
@@ -256,11 +284,12 @@ class ProteinDataset(Dataset):
             aa_str = ''.join([num_to_letter[i.item()] for i in aa_num])
             aa_mask = aa_mask[duplicate_mask]
             atom_type = atom_type[duplicate_mask]
-            chain_id = chain_id[duplicate_mask]
-            res_id = res_id[duplicate_mask]
-            icode = icode[duplicate_mask]
+            dm = duplicate_mask.detach().cpu().numpy()
+            chain_id = np.asarray(chain_id)[dm]
+            res_id = np.asarray(res_id)[dm]
+            icode = np.asarray(icode)[dm]
 
-        chain_id = torch.as_tensor(np.asarray(chain_id), dtype=torch.long, device=coords.device)
+        chain_id = _chain_id_to_torch_long(chain_id, coords.device)
         res_id = torch.as_tensor(np.asarray(res_id), dtype=torch.long, device=coords.device)
         icode = np.asarray(icode)
 
@@ -286,6 +315,8 @@ class ProteinDataset(Dataset):
                 coords = self.pad_tensor(coords, m)
                 aa_pad = torch.full((m,), pad_aa_idx, dtype=aa_num.dtype, device=aa_num.device)
                 aa_num = torch.cat([aa_num, aa_pad], dim=0)
+                if type(aa_str) == list:
+                    aa_str = ''.join(aa_str)
                 aa_str = aa_str + ('X' * m)
                 atom_mask = self.pad_tensor(atom_mask, m)
                 aa_pad_mask = torch.zeros((m,), dtype=aa_mask.dtype, device=aa_mask.device)
@@ -334,7 +365,7 @@ class ProteinDataset(Dataset):
         return len(list(self.clusters.keys()))
     @property
     def dimension(self):
-        return self.max_length * 4
+        return 4
 
 def get_edge_features(X, edge_index, atom_mask=None, all_atoms=False, chain_index=None):
     edge_src, edge_dst = edge_index

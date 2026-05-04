@@ -11,7 +11,7 @@ from utils.train_utils import count_parameters
 from pathlib import Path
 from dataset_cluster import get_dataloader
 from utils.structure_utils import create_structure_from_crds
-from loss import CFMLoss
+from flowpacker.loss import CFMLoss
 from models.cnf import CNF
 from models.equiformer_v2.equiformer_v2 import EquiformerV2
 import math
