@@ -25,7 +25,7 @@ from torch_utils import distributed as dist
 from torch_utils import misc, training_stats
 from flowpacker.dataset_cluster import ProteinDataset
 
-from networks import FlowPackerWrapper
+from training.networks import FlowPackerWrapper
 
 #----------------------------------------------------------------------------
 
@@ -68,20 +68,19 @@ def training_loop(
         dfeat = initial_cond.size(-1)
         bidx = batch.batch
 
-        #global mean pooling - have to do this becaause global_mean_pool will include all nodes including padding ones
+        # global mean pooling — exclude padding nodes (aa_mask == 0)
         sums = torch.zeros(num_graphs, dfeat, device=dev, dtype=dty)
         counts = torch.zeros(num_graphs, device=dev, dtype=dty)
-        sums.index_add_(0, bidx, initial_cond * aa_m.unsqueeze(-1))
+        sums.index_add_(0, bidx, initial_cond * aa_mask.unsqueeze(-1))
         counts.index_add_(0, bidx, aa_mask)
         mean_pool = sums / counts.clamp(min=1e-8).unsqueeze(-1)
         node_count = torch.log1p(counts).unsqueeze(-1)
-
 
         row, col = batch.edge_index
         edge_counts = torch.zeros(num_graphs, device=dev, dtype=dty)
         if row.numel() > 0:
             eb = bidx[row]
-            valid = (aa_m[row] != 0) & (aa_m[col] != 0)
+            valid = (aa_mask[row] != 0) & (aa_mask[col] != 0)
             if valid.any():
                 edge_counts.index_add_(
                     0, eb[valid], torch.ones(int(valid.sum().item()), device=dev, dtype=dty)
@@ -110,39 +109,37 @@ def training_loop(
 
     # Load dataset.
     dist.print0('Loading dataset...')
-    dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # subclass of training.dataset.Dataset
+    dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs)
     dataset_sampler = misc.InfiniteSampler(dataset=dataset_obj, rank=dist.get_rank(), num_replicas=dist.get_world_size(), seed=seed)
-    if dataset_obj.class_name == 'flowpacker.dataset_cluster.ProteinDataset':
+    if dataset_kwargs.get('class_name') in ['flowpacker.dataset_cluster.ProteinDataset', 'datasets.npz_protein_dataset.NpzProteinDataset']:
         dataset_iterator = iter(PyGDataLoader(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
     else:
         dataset_iterator = iter(torch.utils.data.DataLoader(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
 
     # Construct network.
     dist.print0('Constructing network...')
-    net = dnnlib.util.construct_class_by_name(**network_kwargs) # subclass of torch.nn.Module
+    net = dnnlib.util.construct_class_by_name(**network_kwargs)
     net.train().requires_grad_(True).to(device)
     if dist.get_rank() == 0:
         with torch.no_grad():
             images = torch.zeros([batch_gpu, 1, net.in_channels], device=device)
             sigma = torch.ones([batch_gpu], device=device)
-            misc.print_module_summary(net, [images, sigma], max_nesting=2)
+            cond_dummy = torch.zeros([batch_gpu, 71], device=device)
+            misc.print_module_summary(net, [images, cond_dummy, sigma], max_nesting=2)
 
     # Setup teacher model if we need it
-    teacher_net = None 
+    teacher_net = None
     if loss_kwargs.teacher_model is not None:
-        # Rank 0 goes first.
         if dist.get_rank() != 0:
             torch.distributed.barrier()
 
-        # Load network.
         dist.print0(f'Loading teacher network from "{loss_kwargs.teacher_model}"...')
-        if dataset_obj.class_name == 'flowpacker.dataset_cluster.ProteinDataset':
+        if dataset_kwargs.get('class_name') in ['flowpacker.dataset_cluster.ProteinDataset', 'datasets.npz_protein_dataset.NpzProteinDataset']:
             teacher_net = FlowPackerWrapper()
         else:
             with dnnlib.util.open_url(loss_kwargs.teacher_model, verbose=(dist.get_rank() == 0)) as f:
                 teacher_net = pickle.load(f)['ema'].to(device)
 
-        # Other ranks follow.
         if dist.get_rank() == 0:
             torch.distributed.barrier()
 
@@ -150,34 +147,32 @@ def training_loop(
     dist.print0('Setting up optimizer...')
     loss_kwargs.update(teacher_model=teacher_net)
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
-    optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
+    optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs)
     ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device], find_unused_parameters=True)
-    # ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device], find_unused_parameters=False)
     ema = copy.deepcopy(net).eval().requires_grad_(False)
 
     # Resume training from previous snapshot.
     if resume_pkl is not None:
         dist.print0(f'Loading network weights from "{resume_pkl}"...')
         if dist.get_rank() != 0:
-            torch.distributed.barrier() # rank 0 goes first
+            torch.distributed.barrier()
         with dnnlib.util.open_url(resume_pkl, verbose=(dist.get_rank() == 0)) as f:
             data = pickle.load(f)
         if dist.get_rank() == 0:
-            torch.distributed.barrier() # other ranks follow
+            torch.distributed.barrier()
         if hasattr(data['ema'], 'logvar_linear'):
             misc.copy_params_and_buffers(src_module=data['ema'], dst_module=net, require_all=False)
             misc.copy_params_and_buffers(src_module=data['ema'], dst_module=ema, require_all=False)
         else:
-            # fine-tuning from a model without logvar_linear
             misc.copy_params_and_buffers(src_module=data['ema'].model, dst_module=net.model, require_all=True)
             misc.copy_params_and_buffers(src_module=data['ema'].model, dst_module=ema.model, require_all=True)
-        del data # conserve memory
+        del data
     if resume_state_dump:
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
         data = torch.load(resume_state_dump, map_location=torch.device('cpu'))
         misc.copy_params_and_buffers(src_module=data['net'], dst_module=net, require_all=True)
         optimizer.load_state_dict(data['optimizer_state'])
-        del data # conserve memory
+        del data
 
     # Train.
     dist.print0(f'Training for {total_kimg} kimg...')
@@ -196,10 +191,23 @@ def training_loop(
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
                 batch = next(dataset_iterator)
                 batch = batch.to(device)
-                #conditioning function
-                cond_graph = protein_graph_conditioning(batch) 
-                cond = cond_graph[batch.batch]
-                loss = loss_fn(net=ddp, x=batch.chi, x_mask=batch.chi_mask, cond=cond, batch=batch, iter_steps=int(cur_nimg // batch_size))
+
+                # Conditioning: per-graph vector broadcast to per-node
+                cond_graph = protein_graph_conditioning(batch)  # (num_graphs, 71)
+                cond = cond_graph[batch.batch]                  # (N*512, 71)
+
+                # x: (N*512, 1, 4), x_mask: (N*512, 1, 4)
+                x = batch.chi.unsqueeze(1)
+                x_mask = batch.chi_mask.unsqueeze(1)
+
+                loss = loss_fn(
+                    net=ddp,
+                    x=x,
+                    x_mask=x_mask,
+                    cond=cond,
+                    batch=batch,
+                    iter_steps=int(cur_nimg // batch_size)
+                )
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
 
@@ -222,7 +230,7 @@ def training_loop(
         if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + kimg_per_tick * 1000):
             continue
 
-        # Print status line, accumulating the same information in training_stats.
+        # Print status line.
         tick_end_time = time.time()
         fields = []
         fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
@@ -252,11 +260,11 @@ def training_loop(
                     value = copy.deepcopy(value).eval().requires_grad_(False)
                     misc.check_ddp_consistency(value)
                     data[key] = value.cpu()
-                del value # conserve memory
+                del value
             if dist.get_rank() == 0:
                 with open(os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl'), 'wb') as f:
                     pickle.dump(data, f)
-            del data # conserve memory
+            del data
 
         # Save full dump of the training state.
         if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:

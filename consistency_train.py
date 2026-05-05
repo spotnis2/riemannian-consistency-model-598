@@ -46,7 +46,7 @@ def parse_int_list(s):
 # Main options.
 @click.option('--num-samples',      help='Samples in datasets', metavar='N',                           type=int, default=10000, show_default=True)
 @click.option('--data',             help='Dataset path', metavar='STR',                                type=str, default=None, show_default=True)
-@click.option('--dataset-name',     help='Dataset name', metavar="STR",                                type=click.Choice(['Board', 'Protein', 'RNA', 'Rotation', 'Cone', 'Fisher', 'Line', 'Peak', 'Volcano', 'Earthquake', 'Fire', 'Flood']), default='Board', show_default=True)
+@click.option('--dataset-name',     help='Dataset name', metavar="STR",                                type=click.Choice(['Board', 'Protein', 'RNA', 'Rotation', 'Cone', 'Fisher', 'Line', 'Peak', 'Volcano', 'Earthquake', 'Fire', 'Flood', 'ProteinDataset', 'NpzProteinDataset']), default='Board', show_default=True)
 @click.option('--manifold',         help='Which manifold the data is on', metavar='STR',               type=click.Choice(['Euclidean', 'Torus', 'Sphere', 'SO3']), default='Euclidean', show_default=True)
 @click.option('--outdir',           help='Where to save the results', metavar='DIR',                   type=str, required=True)
 @click.option('--precond',          help='Preconditioning & loss function', metavar='flow',            type=click.Choice(['flow']), default='flow', show_default=True)
@@ -122,8 +122,10 @@ def main(**kwargs):
     elif opts.dataset_name == 'SideChainAngleDatasetAlreadyLoaded':
         c.dataset_kwargs = dnnlib.EasyDict(class_name='datasets.torus_dataset.SideChainAngleDatasetAlreadyLoaded', cond_path="./data/conditioning_vectors.pt", side_chain_path="./data/side_chain_data.pt")
     elif opts.dataset_name == 'ProteinDataset':
-        c.dataset_kwargs = dnnlib.EasyDict(class_name='flowpacker.dataset_cluster.ProteinDataset', root=opts.data)
+        c.dataset_kwargs = dnnlib.EasyDict(class_name='flowpacker.dataset_cluster.ProteinDataset', dataset_path=opts.data, cluster_path=None)
 
+    elif opts.dataset_name == 'NpzProteinDataset':
+        c.dataset_kwargs = dnnlib.EasyDict(class_name='datasets.npz_protein_dataset.NpzProteinDataset', backbone_path='datasets/backbone_data.npz', side_chain_path='datasets/side_chain_data.npz', sequence_path='datasets/sequence_data.npz')
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=opts.workers, prefetch_factor=2)
     c.network_kwargs = dnnlib.EasyDict()
     c.loss_kwargs = dnnlib.EasyDict()
@@ -132,6 +134,8 @@ def main(**kwargs):
     # Validate dataset options.
     dataset_obj = dnnlib.util.construct_class_by_name(**c.dataset_kwargs)
     c.dataset_kwargs.data_dimension = dataset_obj.dimension
+    if opts.dataset_name in ["ProteinDataset", "NpzProteinDataset"]:
+        c.dataset_kwargs.data_dimension = 4
     c.dataset_kwargs.max_size = len(dataset_obj) # be explicit about dataset size
     del dataset_obj # conserve memory
 

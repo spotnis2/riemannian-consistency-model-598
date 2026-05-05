@@ -57,17 +57,21 @@ class ProteinDataset(Dataset):
         for filename in txt_files:
             with open(filename, 'r') as f:
                 for line in f.readlines():
-                    structures.append(line.split('_')[0])
-                    if line.split('_')[1].isalpha():
-                        self.struct_to_extension[line.split('_')[0]] = ".pdb"
+                    line = line.strip()
+                    if not line or '_' not in line:
+                        continue
+                    parts = line.split('_')
+                    pdb_id = parts[0]
+                    chain = parts[1] if len(parts) > 1 else 'A'
+                    structures.append(pdb_id)
+                    if chain.isalpha():
+                        self.struct_to_extension[pdb_id] = ".pdb"
                     else:
-                        self.struct_to_extension[line.split('_')[0]] = ".cif"
+                        self.struct_to_extension[pdb_id] = ".cif"
 
         unique_structures = list(np.unique(structures))
         mem_to_rep = {i:i for i in unique_structures}
         self.clusters = {i:[] for i in mem_to_rep.keys()}
-
-        
 
         num_struct = 0
         for s in tqdm(unique_structures):
@@ -75,12 +79,20 @@ class ProteinDataset(Dataset):
             self.clusters[cluster_rep].append(s)
             num_struct += 1
 
-        # remove clusters not found in structures - mainly for debugging
+        # remove clusters not found in structures
         cluster_copy = self.clusters.copy()
         for k,v in cluster_copy.items():
             if not v:
                 self.clusters.pop(k)
 
+        # only keep clusters where we actually have the PDB file
+        available = {f.stem[:4] for f in self.data_path.glob("*.pdb")}
+        cluster_copy2 = list(self.clusters.keys())
+        for k in cluster_copy2:
+            self.clusters[k] = [s for s in self.clusters[k] if s in available]
+            if not self.clusters[k]:
+                del self.clusters[k]
+        
         self.num_to_rep_id = {idx:i for idx,i in enumerate(self.clusters.keys())}
 
         print(f'Loaded {len(self.clusters)} clusters containing {num_struct} structures...')
@@ -90,28 +102,22 @@ class ProteinDataset(Dataset):
             f"Computing full dataset of {len(paths)} with {multiprocessing.cpu_count()} threads"
         )
         data = list(process_map(self.get_features, paths, chunksize=100))
-
         return data
 
     def get_features(self, path):
         try:
             if path.suffix == ".cif":
-                file_path = rcsb.fetch(path.stem, format="cif", target_path=self.data_path)
-                with open(file_path, "r") as f:
+                with open(path, "r") as f:
                     structure = CIFFile.read(f)
                     structure = get_structure(structure)
             else:
-                file_path = rcsb.fetch(path.stem, format="pdb", target_path=self.data_path)
-                with open(file_path, "r") as f:
+                with open(path, "r") as f:
                     structure = PDBFile.read(f)
                     structure = structure.get_structure()
         except:
             return None
 
-        # if struc.get_chain_count(structure) > 1: return None # only single chains
-
         _, aa = struc.get_residues(structure)
-        # Replace nonstandard amino acids with X
         for idx, a in enumerate(aa):
             if a not in three_to_one_letter.keys():
                 aa[idx] = 'UNK'
@@ -119,14 +125,9 @@ class ProteinDataset(Dataset):
         aa_str = [three_to_one_letter.get(i,'X') for i in aa]
         aa_num = [letter_to_num[i] for i in aa_str]
 
-        # if len(aa_str) > self.max_length or len(aa_str) < self.min_length:
-        #     return None
-        # if len(aa_str) < self.min_length: return None
-
         aa_mask = np.ones(len(aa))
         atom14_mask = np.zeros((len(aa), max_num_heavy_atoms))
         atom37_mask = np.zeros((len(aa), atom_type_num))
-        # Iterate through all residues
         coords, coords37, atom_type, chain_ids, res_id, icode = [], [], [], [], [], []
         for res_idx, res in enumerate(struc.residue_iter(structure)):
             res_coords = res.coord[0]
@@ -138,7 +139,6 @@ class ProteinDataset(Dataset):
             if res_name == "UNK":
                 aa_mask[res_idx] = 0
 
-            # Append true coords
             res_crd14 = np.zeros((max_num_heavy_atoms, 3))
             res_crd37 = np.zeros((atom_type_num, 3))
             res_atom_type = []
@@ -152,7 +152,6 @@ class ProteinDataset(Dataset):
                 if i.size == 0:
                     res_crd14[atom14_idx] = 0
                     res_crd37[atom37_idx] = 0
-
                 else:
                     res_crd14[atom14_idx] = res_coords[i[0]]
                     atom14_mask[res_idx, atom14_idx] = 1
@@ -202,9 +201,8 @@ class ProteinDataset(Dataset):
                 d[k] = torch.tensor(v).to(dtype=feat_dtypes[k])
 
         return d
-    
+
     def pad_tensor(self, x, m):
-        """Append ``m`` zero rows. Supports ``torch.Tensor`` or ``numpy.ndarray`` (numeric only)."""
         if m <= 0:
             return x
         if isinstance(x, np.ndarray):
@@ -214,7 +212,6 @@ class ProteinDataset(Dataset):
         return torch.cat([x, zeros], dim=0)
 
     def pad_long_field(self, t, m, fill_value=-1):
-        """Append rows with a constant integer (metadata like chain/res id on pads)."""
         if m <= 0:
             return t
         if not isinstance(t, torch.Tensor):
@@ -228,9 +225,24 @@ class ProteinDataset(Dataset):
         try:
             structure = self.to_tensor(torch.load(self.data_path.joinpath(f'{pdb_id}.pth')))
         except FileNotFoundError:
-            structure = self.to_tensor(self.get_features(self.data_path.joinpath(f'{pdb_id}.{self.struct_to_extension[pdb_id]}')))
-            
-               
+            # Try with _A chain suffix since files are named pdbid_A.pdb
+            ext = self.struct_to_extension.get(pdb_id, '.pdb')
+            path_with_chain = self.data_path / f'{pdb_id}_A{ext}'
+            path_without_chain = self.data_path / f'{pdb_id}{ext}'
+            path = path_with_chain if path_with_chain.exists() else path_without_chain
+            features = self.get_features(path)
+            if features is None:
+                return self.__getitem__((idx + 1) % len(self))
+            structure = self.to_tensor(features)
+        # except FileNotFoundError:
+        #     ext = self.struct_to_extension.get(pdb_id, '.pdb')
+        #     features = self.get_features(self.data_path.joinpath(f'{pdb_id}{ext}'))
+            if features is None:
+                # skip broken PDB, return a random different item
+                return self.__getitem__(random.randint(0, len(self) - 1))
+            structure = self.to_tensor(features)
+        except Exception:
+            return self.__getitem__(random.randint(0, len(self) - 1))
 
         coords = structure['coord']
         aa_str = structure['aa']
@@ -241,8 +253,6 @@ class ProteinDataset(Dataset):
         chain_id = structure['chain_id']
         res_id, icode = structure['res_id'], structure['icode']
 
-        # There seems to be an issue with some pdbs where missing coordinates are just duplicated as previous residue's
-        # coordinates - remove them since they dont work with equiformerv2 when computing edge_vec
         pairwise_dist = torch.cdist(coords[:,1], coords[:,1])
         x,y = torch.triu_indices(len(coords),len(coords))
         pairwise_dist[x,y] = 9999
@@ -260,11 +270,17 @@ class ProteinDataset(Dataset):
             res_id = res_id[duplicate_mask]
             icode = icode[duplicate_mask]
 
-        chain_id = torch.as_tensor(np.asarray(chain_id), dtype=torch.long, device=coords.device)
+        # chain_id = torch.as_tensor(np.asarray(chain_id), dtype=torch.long, device=coords.device)
+        # encode chain letters as integers (A=0, B=1, etc.)
+        chain_id_arr = np.asarray(chain_id)
+        chain_id = torch.as_tensor(
+            np.array([ord(c[0]) if len(c) > 0 else 0 for c in chain_id_arr], dtype=np.int64),
+            dtype=torch.long, device=coords.device
+        )
         res_id = torch.as_tensor(np.asarray(res_id), dtype=torch.long, device=coords.device)
         icode = np.asarray(icode)
 
-        origin = coords[:,:4].reshape(-1, 3).mean(0) # CoM of backbone atoms
+        origin = coords[:,:4].reshape(-1, 3).mean(0)
         coords = (coords - origin.unsqueeze(0)) * atom_mask.unsqueeze(-1)
 
         pad_aa_idx = letter_to_num['X']
@@ -286,7 +302,8 @@ class ProteinDataset(Dataset):
                 coords = self.pad_tensor(coords, m)
                 aa_pad = torch.full((m,), pad_aa_idx, dtype=aa_num.dtype, device=aa_num.device)
                 aa_num = torch.cat([aa_num, aa_pad], dim=0)
-                aa_str = aa_str + ('X' * m)
+                # aa_str = aa_str + ('X' * m)
+                aa_str = ''.join(aa_str) + ('X' * m)
                 atom_mask = self.pad_tensor(atom_mask, m)
                 aa_pad_mask = torch.zeros((m,), dtype=aa_mask.dtype, device=aa_mask.device)
                 aa_mask = torch.cat([aa_mask, aa_pad_mask], dim=0)
@@ -303,21 +320,19 @@ class ProteinDataset(Dataset):
         chi_alt_mask = chi_alt_truths[aa_num] == 1
         chi_angles[chi_alt_mask] = ((chi_angles[chi_alt_mask] + math.pi) % math.pi) - math.pi
         chi_alt_angles = chi_angles.clone()
-        # first move to [0, 2pi] and then add pi and then back to [-pi, pi] - this seems unnecessarily convoluted
         chi_alt_angles[chi_alt_mask] = ((chi_angles[chi_alt_mask] + (2*math.pi)) % (2*math.pi)) - math.pi
 
-        # mask unknown residues
         chi_mask = chi_mask * aa_mask.unsqueeze(-1)
         chi_angles = chi_angles * chi_mask
         chi_alt_angles = chi_alt_angles * chi_mask
 
-        # edge index
         ca = coords[:,1]
         if self.edge_type == 'radius':
             edge_index = radius_graph(ca, r=self.max_radius, max_num_neighbors=self.max_num_neighbors)
         elif self.edge_type == 'knn':
             edge_index = knn_graph(ca, k=self.max_num_neighbors)
-        else: raise NotImplementedError('wrong edge type')
+        else:
+            raise NotImplementedError('wrong edge type')
 
         edge_index = filter_edges_by_residue_mask(edge_index, aa_mask)
 
@@ -332,19 +347,16 @@ class ProteinDataset(Dataset):
 
     def __len__(self):
         return len(list(self.clusters.keys()))
+
     @property
     def dimension(self):
         return self.max_length * 4
+
 
 def get_edge_features(X, edge_index, atom_mask=None, all_atoms=False, chain_index=None):
     edge_src, edge_dst = edge_index
     edge_feat = []
     relpos = torch.clamp(edge_src - edge_dst, min=-32, max=32) + 32
-
-    # if chain_index is not None:
-
-
-
     relpos = F.one_hot(relpos, num_classes=65).float()
     edge_feat.append(relpos)
 
@@ -353,34 +365,28 @@ def get_edge_features(X, edge_index, atom_mask=None, all_atoms=False, chain_inde
         X_dst = X[edge_dst]
         mask_src = atom_mask[edge_src]
         mask_dst = atom_mask[edge_dst]
-
         dist = torch.cdist(X_src, X_dst) * mask_src.unsqueeze(-1) * mask_dst.unsqueeze(-2)
         dist = dist.view(-1, 196).clamp(max=12.)
-
         edge_feat.append(dist)
 
     edge_feat = torch.cat(edge_feat, dim=-1)
     return edge_feat
 
+
 def get_dataloader(config, sample=False, ddp=False):
     if not sample:
         train_ds = ProteinDataset(dataset_path="./data", **config.data)
-    # test_ds = ProteinDataset(dataset_path=config.data.test_path, **config.data, filter_length=False, test=True)
 
     batch_size = config.train.batch_size if not sample else config.sample.batch_size
 
     if ddp:
         from torch.utils.data.distributed import DistributedSampler
         train_sampler = DistributedSampler(train_ds)
-        # test_sampler = DistributedSampler(test_ds)
         train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler)
-        # test_dl = DataLoader(test_ds, batch_size=batch_size, sampler=test_sampler)
         return train_dl, None, train_sampler, None
     else:
         if not sample:
             train_dl = DataLoader(train_ds, batch_size=batch_size, num_workers=0, shuffle=True)
         else:
             train_dl = None
-        # test_dl = DataLoader(test_ds, batch_size=batch_size, num_workers=0, shuffle=True)
         return train_dl, None, None, None
-
