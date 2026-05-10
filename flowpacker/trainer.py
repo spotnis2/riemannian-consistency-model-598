@@ -5,17 +5,17 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.loader import load_seed,  load_ema, load_config
-from utils.logger import Logger, set_log, start_log
-from utils.train_utils import count_parameters
+from .utils.loader import load_seed,  load_ema, load_config
+from .utils.logger import Logger, set_log, start_log
+from .utils.train_utils import count_parameters
 from pathlib import Path
-from dataset_cluster import get_dataloader
-from utils.structure_utils import create_structure_from_crds
+from .dataset_cluster import get_dataloader
+from .utils.structure_utils import create_structure_from_crds
 from flowpacker.loss import CFMLoss
-from models.cnf import CNF
-from models.equiformer_v2.equiformer_v2 import EquiformerV2
+from .models.cnf import CNF
+from .models.equiformer_v2.equiformer_v2 import EquiformerV2
 import math
-from utils.metrics import metrics_per_chi, atom_rmsd
+from .utils.metrics import metrics_per_chi, atom_rmsd
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 class Trainer(object):

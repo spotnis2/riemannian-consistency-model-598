@@ -1,7 +1,7 @@
 import torch
 import random
 import numpy as np
-from utils.ema import ExponentialMovingAverage
+from .ema import ExponentialMovingAverage
 import yaml
 from easydict import EasyDict as edict
 

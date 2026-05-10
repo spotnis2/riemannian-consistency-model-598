@@ -1,6 +1,6 @@
 from Bio.PDB import StructureBuilder
 from Bio.PDB.PDBIO import PDBIO
-from utils.constants import num_to_letter, one_to_three_letter, restype_to_heavyatom_names
+from .constants import num_to_letter, one_to_three_letter, restype_to_heavyatom_names
 import warnings
 import torch
 

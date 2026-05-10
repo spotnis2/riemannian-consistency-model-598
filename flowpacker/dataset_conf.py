@@ -13,10 +13,10 @@ import biotite.structure as struc
 from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import PDBxFile, get_structure
 
-from utils.constants import three_to_one_letter, letter_to_num, max_num_heavy_atoms, \
+from .utils.constants import three_to_one_letter, letter_to_num, max_num_heavy_atoms, \
     restype_to_heavyatom_names, heavyatom_to_label, chi_alt_truths, num_to_letter, chi_true_indices, chi_mask, atom_types, atom_type_num
 
-from utils.sidechain_utils import get_bb_dihedral, get_chi_angles
+from .utils.sidechain_utils import get_bb_dihedral, get_chi_angles
 
 from torch_geometric.data import Data, DataLoader
 from torch_cluster import radius_graph, knn_graph

@@ -3,9 +3,9 @@ import torch.nn as nn
 from torch import Tensor
 from torch.distributions import Uniform
 import math
-from dataset_cluster import get_edge_features
-from utils.sidechain_utils import Idealizer
-from utils.so2_utils import exp
+from ..dataset_cluster import get_edge_features
+from ..utils.sidechain_utils import Idealizer
+from ..utils.so2_utils import log, exp
 from torch_cluster import radius_graph, knn_graph
 import numpy as np
 import copy

@@ -156,6 +156,7 @@ def main(**kwargs):
     if not opts.distillation:
         c.loss_kwargs.update(distillation=False, teacher_model=opts.teacher)
     else:
+        print("DISTILLATION IS TRUE")
         c.loss_kwargs.update(distillation=True, teacher_model=opts.teacher)
 
     # Network options.

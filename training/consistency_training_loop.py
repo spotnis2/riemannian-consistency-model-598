@@ -90,7 +90,6 @@ def training_loop(
 
         cond_vector = torch.cat([mean_pool, node_count, edge_count], dim=-1)
 
-        print(cond_vector.shape)
         return cond_vector
 
     # Initialize.
@@ -120,6 +119,7 @@ def training_loop(
 
     # Construct network.
     dist.print0('Constructing network...')
+    print(network_kwargs)
     net = dnnlib.util.construct_class_by_name(**network_kwargs) # subclass of torch.nn.Module
     net.train().requires_grad_(True).to(device)
     if dist.get_rank() == 0:
@@ -146,7 +146,6 @@ def training_loop(
         # Other ranks follow.
         if dist.get_rank() == 0:
             torch.distributed.barrier()
-
     # Setup optimizer.
     dist.print0('Setting up optimizer...')
     loss_kwargs.update(teacher_model=teacher_net)
@@ -194,14 +193,15 @@ def training_loop(
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
         for round_idx in range(num_accumulation_rounds):
+            print("ROUND_IDX", round_idx)
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
                 batch = next(dataset_iterator)
                 batch = batch.to(device)
                 #conditioning function
                 cond_graph = protein_graph_conditioning(batch) 
                 cond = cond_graph[batch.batch]
+                print("COND SHAPE", cond.shape)
                 loss = loss_fn(net=ddp, x=batch.chi, x_mask=batch.chi_mask, cond=cond, batch=batch, iter_steps=int(cur_nimg // batch_size))
-                print("RETURN VALUE FROM LOSS FUNCTION", loss)
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
 

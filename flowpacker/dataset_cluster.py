@@ -14,10 +14,10 @@ from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import CIFFile, get_structure
 import biotite.database.rcsb as rcsb
 
-from utils.constants import three_to_one_letter, letter_to_num, max_num_heavy_atoms, \
+from .utils.constants import three_to_one_letter, letter_to_num, max_num_heavy_atoms, \
     restype_to_heavyatom_names, heavyatom_to_label, chi_alt_truths, num_to_letter, chi_true_indices, chi_mask, atom_types, atom_type_num
 
-from utils.sidechain_utils import get_bb_dihedral, get_chi_angles
+from .utils.sidechain_utils import get_bb_dihedral, get_chi_angles
 
 from torch_geometric.data import Data, DataLoader
 from torch_cluster import radius_graph, knn_graph
@@ -37,21 +37,12 @@ def filter_edges_by_residue_mask(edge_index, residue_mask):
     keep = (residue_mask[row] != 0) & (residue_mask[col] != 0)
     return edge_index[:, keep]
 
-def _chain_id_to_torch_long(chain_id, device):
+def chain_id_to_torch_long(chain_id, device):
     """Biotite stores PDB chain IDs as strings; PyG / torch expect int64 per residue."""
-    if isinstance(chain_id, torch.Tensor):
-        return chain_id.long().to(device)
-    arr = np.asarray(chain_id)
-    if arr.size == 0:
-        return torch.zeros(arr.shape, dtype=torch.long, device=device)
-    if arr.dtype.kind in "iub":
-        return torch.as_tensor(arr.astype(np.int64, copy=False), dtype=torch.long, device=device)
-    flat = arr.reshape(-1)
-    out = np.empty(flat.shape[0], dtype=np.int64)
-    for i, x in enumerate(flat):
+    out = np.empty(chain_id.shape, dtype=np.int64)
+    for i, x in enumerate(chain_id):
         s = str(x).strip()
         out[i] = ord(s[0]) if s else 0
-    out = out.reshape(arr.shape)
     return torch.as_tensor(out, dtype=torch.long, device=device)
     
 class ProteinDataset(Dataset):
@@ -113,7 +104,6 @@ class ProteinDataset(Dataset):
         return data
 
     def get_features(self, path):
-        print("PATH", path)
         try:
             if path.suffix == ".cif":
                 file_path = rcsb.fetch(path.stem, format="cif", target_path=self.data_path)
@@ -230,22 +220,13 @@ class ProteinDataset(Dataset):
     
     def pad_tensor(self, x, m):
         """Append ``m`` zero rows. Supports ``torch.Tensor`` or ``numpy.ndarray`` (numeric only)."""
-        if m <= 0:
-            return x
-        if isinstance(x, np.ndarray):
-            width = [(0, m)] + [(0, 0)] * (x.ndim - 1)
-            return np.pad(x, width, constant_values=0)
         zeros = torch.zeros((m, *x.shape[1:]), device=x.device, dtype=x.dtype)
         return torch.cat([x, zeros], dim=0)
 
     def pad_long_field(self, t, m, fill_value=-1):
         """Append rows with a constant integer (metadata like chain/res id on pads)."""
-        if m <= 0:
-            return t
-        if not isinstance(t, torch.Tensor):
-            t = torch.as_tensor(np.asarray(t), dtype=torch.long)
         pad = torch.full((m,), fill_value, dtype=t.dtype, device=t.device)
-        return torch.cat([t.reshape(-1), pad])
+        return torch.cat([t, pad])
 
     def __getitem__(self, idx):
         rep_id = self.num_to_rep_id[idx]
@@ -253,7 +234,6 @@ class ProteinDataset(Dataset):
         try:
             structure = self.to_tensor(torch.load(self.data_path.joinpath(f'{pdb_id}.pth')))
         except FileNotFoundError:
-            print("AHHHHHHHH")
             structure = self.to_tensor(self.get_features(self.data_path.joinpath(f'{pdb_id}{self.struct_to_extension[pdb_id]}')))
   
             
@@ -289,7 +269,7 @@ class ProteinDataset(Dataset):
             res_id = np.asarray(res_id)[dm]
             icode = np.asarray(icode)[dm]
 
-        chain_id = _chain_id_to_torch_long(chain_id, coords.device)
+        chain_id = chain_id_to_torch_long(chain_id, coords.device)
         res_id = torch.as_tensor(np.asarray(res_id), dtype=torch.long, device=coords.device)
         icode = np.asarray(icode)
 
@@ -358,7 +338,7 @@ class ProteinDataset(Dataset):
                  pos=coords, edge_attr=edge_feat, aa_mask=aa_mask, bb_dihedral=bb_dihedral, chi=chi_angles,
                     chi_alt=chi_alt_angles, chi_mask=chi_mask, atom_mask=atom_mask, chi_alt_mask=chi_alt_mask,
                     atom_type=atom_type, chain_id=chain_id, res_id=res_id, icode=icode)
-
+        print(data.num_nodes)
         return data
 
     def __len__(self):
@@ -393,25 +373,23 @@ def get_edge_features(X, edge_index, atom_mask=None, all_atoms=False, chain_inde
     edge_feat = torch.cat(edge_feat, dim=-1)
     return edge_feat
 
-def get_dataloader(config, sample=False, ddp=False):
+def get_dataloader(batch_size, sample=False, ddp=False):
     if not sample:
-        train_ds = ProteinDataset(dataset_path="./data", **config.data)
-    # test_ds = ProteinDataset(dataset_path=config.data.test_path, **config.data, filter_length=False, test=True)
-
-    batch_size = config.train.batch_size if not sample else config.sample.batch_size
+        train_ds = ProteinDataset(dataset_path="./data")
+    test_ds = ProteinDataset(dataset_path="./data/test", filter_length=True, test=True)
 
     if ddp:
         from torch.utils.data.distributed import DistributedSampler
         train_sampler = DistributedSampler(train_ds)
-        # test_sampler = DistributedSampler(test_ds)
+        test_sampler = DistributedSampler(test_ds)
         train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler)
-        # test_dl = DataLoader(test_ds, batch_size=batch_size, sampler=test_sampler)
+        test_dl = DataLoader(test_ds, batch_size=batch_size, sampler=test_sampler)
         return train_dl, None, train_sampler, None
     else:
         if not sample:
             train_dl = DataLoader(train_ds, batch_size=batch_size, num_workers=0, shuffle=True)
         else:
             train_dl = None
-        # test_dl = DataLoader(test_ds, batch_size=batch_size, num_workers=0, shuffle=True)
-        return train_dl, None, None, None
+        test_dl = DataLoader(test_ds, batch_size=batch_size, num_workers=0, shuffle=True)
+        return train_dl, test_dl, None, None
 

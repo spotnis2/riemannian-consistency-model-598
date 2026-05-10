@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import math
-from utils.so2_utils import log, exp
-from utils.constants import van_der_waals_radius, atom37_to_14_mask
-from utils.sidechain_utils import Idealizer
-from dataset_cluster import get_edge_features
+from .utils.so2_utils import log, exp
+from .utils.constants import van_der_waals_radius, atom37_to_14_mask
+from .utils.sidechain_utils import Idealizer
+from .dataset_cluster import get_edge_features
 from torch.autograd.functional import jvp
 import random
 from torch_cluster import radius_graph, knn_graph

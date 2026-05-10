@@ -1,6 +1,6 @@
 import torch
 import math
-from utils.constants import heavyatom_to_label, vdw_tensor
+from .constants import heavyatom_to_label, vdw_tensor
 
 def rmsd(pred, target, mask):
     return ((pred-target).square().sum() / mask.sum()).sqrt()
