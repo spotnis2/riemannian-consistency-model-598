@@ -4,6 +4,7 @@ import torch.nn as nn
 from flowpacker.models.cnf import CNF
 from flowpacker.models.equiformer_v2.equiformer_v2 import EquiformerV2
 from flowpacker.utils.loader import load_ema, load_checkpoint
+from gnn_chi_predictor import GNNChiPredictor
 
 class Block(nn.Module):
     def __init__(
@@ -121,15 +122,12 @@ class FlowPrecond(torch.nn.Module):
     ):
         super().__init__()
         self.in_channels = in_channels
-        self.model = MPModel(in_channels, **model_kwargs)
+        #change to GNN model
+        #self.model = MPModel(in_channels, **model_kwargs)
+        self.model = GNNChiPredictor(node_in=63, edge_in=65, hidden=256, n_layers=6)
 
-    def forward(self, x, cond, t):
-        squeeze_mid = x.ndim == 2
-        if squeeze_mid:
-            x = x.unsqueeze(1)
-        F_x = self.model(x, cond, t.flatten())
-        if squeeze_mid:
-            F_x = F_x.squeeze(1)
+    def forward(self, node_feats, edge_index, edge_feats):
+        F_x = self.model(node_feats, edge_index, edge_feats)
         return F_x
 
 class FlowPackerWrapper(torch.nn.Module):
@@ -145,5 +143,3 @@ class FlowPackerWrapper(torch.nn.Module):
     
     def forward(self, t, xt, batch):
         return self.model.get_vf(t, xt, batch)
-
-        

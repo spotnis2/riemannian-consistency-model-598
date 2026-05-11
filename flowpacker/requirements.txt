@@ -1,4 +1,15 @@
-torch
+torch==2.11.0
+torchvision
+torchaudio
+
+torch_geometric
+
+torch_cluster
+torch_scatter
+torch_spline_conv
+
+numpy>=1.26.4
+pandas>=2.0
 tqdm
 tensorboard
 pyyaml
@@ -7,8 +18,4 @@ biotite
 dm-tree
 biopython
 modelcif
-torch_geometric
-numpy==1.22.4
-torch_cluster
-pandas
 e3nn

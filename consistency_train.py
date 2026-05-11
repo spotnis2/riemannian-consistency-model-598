@@ -78,6 +78,7 @@ def parse_int_list(s):
 @click.option('--teacher',          help='Teacher model from network pickle', metavar='PKL|URL',       type=str)
 @click.option('--resume',           help='Resume from previous training state', metavar='PT',          type=str)
 @click.option('-n', '--dry-run',    help='Print training options and exit',                            is_flag=True)
+@click.option('--gnn_student',      help='Whether to use GNN student or not', metavar='BOOL')
 
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs)
@@ -136,7 +137,8 @@ def main(**kwargs):
     del dataset_obj # conserve memory
 
     # Network architecture.
-    c.network_kwargs.update(in_channels=c.dataset_kwargs.data_dimension, base_channels=128, x_channel_mult=[2, 4, 4, 2], emb_channel_mult=2)
+    if not opts.gnn_student:
+        c.network_kwargs.update(in_channels=c.dataset_kwargs.data_dimension, base_channels=128, x_channel_mult=[2, 4, 4, 2], emb_channel_mult=2)
 
     # Preconditioning & loss function.
     if opts.precond == 'flow':
@@ -160,7 +162,8 @@ def main(**kwargs):
         c.loss_kwargs.update(distillation=True, teacher_model=opts.teacher)
 
     # Network options.
-    c.network_kwargs.update(dropout=opts.dropout)
+    if not opts.gnn_student:
+        c.network_kwargs.update(dropout=opts.dropout)
 
     # Training options.
     c.total_kimg = max(int(opts.duration * 1000), 1)

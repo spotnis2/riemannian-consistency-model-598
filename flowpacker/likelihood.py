@@ -19,7 +19,6 @@ import shutil
 from .utils.constants import chi_mask as chi_mask_true
 from .utils.constants import atom14_mask as atom_mask_true
 
-
 class Sampler(object):
     def __init__(self, config, use_gt_masks=False, ddp=False):
         super(Sampler, self).__init__()

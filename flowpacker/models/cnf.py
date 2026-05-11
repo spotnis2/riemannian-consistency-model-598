@@ -10,7 +10,6 @@ from torch_cluster import radius_graph, knn_graph
 import numpy as np
 import copy
 from flowpacker.loss import CFMLoss
-from utils.so2_utils import log, exp
 import random
 from torch.autograd.functional import jvp
 

@@ -57,7 +57,8 @@ def training_loop(
 
     def protein_graph_conditioning(batch):
         bb_dihedrals, pos, aa_onehot, aa_m = batch.bb_dihedral, batch.pos, batch.aa_onehot, batch.aa_mask.float()
-
+        #aa_onehot = [num_residues*batch_size, 21]
+        #aa_mask = [num_residues*batch_size, ]
         pos_flat = pos.reshape(pos.shape[0], -1)
 
         initial_cond = torch.cat([bb_dihedrals.sin(), bb_dihedrals.cos(), pos_flat, aa_onehot], dim=-1)
@@ -116,7 +117,7 @@ def training_loop(
         dataset_iterator = iter(PyGDataLoader(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
     else:
         dataset_iterator = iter(torch.utils.data.DataLoader(dataset=dataset_obj, sampler=dataset_sampler, batch_size=batch_gpu, **data_loader_kwargs))
-
+    
     # Construct network.
     dist.print0('Constructing network...')
     print(network_kwargs)
@@ -153,7 +154,7 @@ def training_loop(
     optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
     ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device], find_unused_parameters=True)
     # ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device], find_unused_parameters=False)
-    ema = copy.deepcopy(net).eval().requires_grad_(False)
+    ema = copy.deepcopy(net).eval().requires_grad_(False)  # copy.deepcopy(net): creates a clone of net. so its type is FlowPrecond
 
     # Resume training from previous snapshot.
     if resume_pkl is not None:
@@ -195,7 +196,7 @@ def training_loop(
         for round_idx in range(num_accumulation_rounds):
             print("ROUND_IDX", round_idx)
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
-                batch = next(dataset_iterator)
+                batch = next(dataset_iterator) #batch.chi shape = [max_residues*batch_size, 4] #batch.chi_mask shape = [max_residues*batch_size, 4]
                 batch = batch.to(device)
                 #conditioning function
                 cond_graph = protein_graph_conditioning(batch) 

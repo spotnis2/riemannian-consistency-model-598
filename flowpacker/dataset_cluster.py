@@ -323,7 +323,7 @@ class ProteinDataset(Dataset):
         chi_alt_angles = chi_alt_angles * chi_mask
 
         # edge index
-        ca = coords[:,1]
+        ca = coords[:,1] #carbon alpha coordinate
         if self.edge_type == 'radius':
             edge_index = radius_graph(ca, r=self.max_radius, max_num_neighbors=self.max_num_neighbors)
         elif self.edge_type == 'knn':
@@ -348,9 +348,9 @@ class ProteinDataset(Dataset):
         return 4
 
 def get_edge_features(X, edge_index, atom_mask=None, all_atoms=False, chain_index=None):
-    edge_src, edge_dst = edge_index
+    edge_src, edge_dst = edge_index #[2, 512*k]
     edge_feat = []
-    relpos = torch.clamp(edge_src - edge_dst, min=-32, max=32) + 32
+    relpos = torch.clamp(edge_src - edge_dst, min=-32, max=32) + 32 #[512*k, ]
 
     # if chain_index is not None:
 
