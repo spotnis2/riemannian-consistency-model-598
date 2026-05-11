@@ -55,7 +55,7 @@ class ConsistencyLoss:
         self.t_embedder = PositionalEncodings()
 
     def construct_gnn_node_features(self, batch, t, xt):
-        node_feats = torch.cat([batch.aa_onehot, batch.bb_dihderal.sin(), batch.bb_dihedral.cos()], dim=-1) #[N, 27]
+        node_feats = torch.cat([batch.aa_onehot, batch.bb_dihedral.sin(), batch.bb_dihedral.cos()], dim=-1) #[N, 27]
         t_for_embed = t.view(-1, 1) #[N, 1]
         t_embed = self.t_embedder(t_for_embed) #[N, 32]
         node_feats = torch.cat([t_embed, xt, node_feats], dim=-1) #[N, 32 + 4 + 27]
@@ -73,27 +73,34 @@ class ConsistencyLoss:
         if self.distillation:
             with torch.no_grad():
                 vf = self.teacher_model(t.unsqueeze(-1), xt, batch)
-        vf = vf * x_mask
-        xt = xt * x_mask
+        vf = vf * x_mask #target vector field
+        xt = xt * x_mask 
         # Here, we need to modify the tangent vector with the Jacobian to account for the potential coordinate transform.
         # For SO(3), the 3-vector representation is NOT the canonical Riemannian coordinate, so there will be a Jacobian term.
         # For Torus and Sphere, the ambient coordinates are Riemannian, so no Jacobian is needed (Jacobian is identity).
-        tangents = (
-            self.manifold.right_jac_inv(xt, vf) if hasattr(self.manifold, 'right_jac_inv') else vf,  # dx
-            torch.zeros_like(cond),
-            torch.ones_like(t)  # dt
-        )
+        # tangents = (
+        #     self.manifold.right_jac_inv(xt, vf) if hasattr(self.manifold, 'right_jac_inv') else vf,  # dx
+        #     torch.zeros_like(cond),
+        #     torch.ones_like(t)  # dt
+        # )
+        dx = self.manifold.right_jac_inv(xt, vf) if hasattr(self.manifold, 'right_jac_inv') else vf
+        dt = torch.ones_like(t)
 
-        node_feats = self.construct_gnn_node_features(batch, t, xt) #[N, 32 + 4 + 27]
-        #[2, num_residues*batch_size*k]
-        edge_index = batch.edge_index #idk, I think in the flowpacker repo, they reconstruct this, but with virtual C_beta positions instead?
-        edge_feats = get_edge_features(batch.pos, edge_index, None, False, None)  #[E(batch_size*num_residues*k), 65]
+        def f(xt, t):
+            node_feats = self.construct_gnn_node_features(batch, t, xt) #[N, 32 + 4 + 27]
+            #[2, num_residues*batch_size*k]
+            #does not depend on xt or t. the tangent needs to be zero.
+            edge_index = batch.edge_index #idk, I think in the flowpacker repo, they reconstruct this, but with virtual C_beta positions instead?
+            # this is not dependent on xt or t. the tangent needs to be zero.
+            edge_feats = get_edge_features(batch.pos, edge_index, None, False, None)  #[E(batch_size*num_residues*k), 65]
+            return net(node_feats, edge_index, edge_feats)
 
         # EDM2 modifies the parameters inplace, which will fail the forward-mode JVP calculation.
         # If you are not using EDM2, you may consider using torch.func.jvp for potentially better efficiency.
 
         #CHANGE FOR GNN STUDENT
-        pred_vf, dvf = torch.autograd.functional.jvp(net, (node_feats, edge_index, edge_feats), tangents, create_graph=True)
+        #ensures that only xt and t are differentiated.
+        pred_vf, dvf = torch.autograd.functional.jvp(f, (xt, t), (dx, dt), create_graph=True)
         #pred_vf, dvf = torch.autograd.functional.jvp(net, (xt, cond, t), tangents, create_graph=True)
         # pred_vf, dvf = torch.func.jvp(net, (xt, t), tangents)
        
