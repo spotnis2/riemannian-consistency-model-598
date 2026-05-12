@@ -3,10 +3,11 @@ import math
 import numpy as np
 import argparse
 import pickle
-from flowpacker.dataset_cluster import get_dataloader
+from flowpacker.dataset_cluster import get_dataloader, get_edge_features
 from pathlib import Path
+from flowpacker.models.equiformer_v2.equiformer_v2 import PositionalEncodings
 
-
+_eval_debug_batches = 0
 def protein_graph_conditioning(batch):
         bb_dihedrals, pos, aa_onehot, aa_m = batch.bb_dihedral, batch.pos, batch.aa_onehot, batch.aa_mask.float()
 
@@ -45,6 +46,14 @@ def protein_graph_conditioning(batch):
  
         return cond_vector
 
+def construct_gnn_node_features(batch, t, xt):
+        t_embedder = PositionalEncodings()
+        node_feats = torch.cat([batch.aa_onehot, batch.bb_dihedral.sin(), batch.bb_dihedral.cos()], dim=-1) #[N, 27]
+        t_for_embed = t.view(-1, 1) #[N, 1]
+        t_embed = t_embedder(t_for_embed) #[N, 32]
+        node_feats = torch.cat([t_embed, xt, node_feats], dim=-1) #[N, 32 + 4 + 27]
+        return node_feats
+
 def torus_wrap(x):
     return x % (2 * math.pi)
 
@@ -57,31 +66,38 @@ def angular_diff_deg(pred, target):
     diff = (diff + math.pi) % (2 * math.pi) - math.pi# wrap to (-π, π]
     return torch.abs(diff) * (180.0 / math.pi)
 
-def sample_1step(net, cond, device, eps=0.05):
-    B = cond.shape[0]
+def sample_1step(net, device, batch, eps=0.05):
+    B = batch.chi.shape[0]
 
     # RCM network expects [B, 1, chi_dim]
 
     x_noise = torch.rand(B, 1, 4, device=device) * 2 * math.pi
     t = torch.full((B,), eps, device=device)
 
-    cond = cond.to(device)
+    edge_index = batch.edge_index #idk, I think in the flowpacker repo, they reconstruct this, but with virtual C_beta positions instead?
+    # this is not dependent on xt or t. the tangent needs to be zero.
+    edge_feats = get_edge_features(batch.pos, edge_index, None, False, None)
 
-    out = net(x_noise, cond, t)
+    out = net(node_feats, edge_index, edge_feats)
+    direct = torus_wrap(out.squeeze(1))
+    x_noise_2d = x_noise.squeeze(1)
+    rcm = torus_wrap(x_noise_2d + (1.0 - eps) * out.squeeze(1))
 
-    return torus_wrap(out.squeeze(1))
+def sample_nstep(net, device, batch, n_step=5, eps=0.05):
 
-def sample_nstep(net, cond, device, n_step=5, eps=0.05):
-
-    B = cond.shape[0]
+    B = batch.chi.shape[0]
     x_noise = torch.rand(B, 1, 4, device=device) * 2 * math.pi
     t = torch.ones((B,), device=device)
-    cond = cond.to(device)
     schedule = np.linspace(eps, 1.0, n_step+1)
     schedule = torch.tensor(schedule)
+
+    node_feats = construct_gnn_node_features(batch, t, x_noise)
+    edge_index = batch.edge_index #idk, I think in the flowpacker repo, they reconstruct this, but with virtual C_beta positions instead?
+    # this is not dependent on xt or t. the tangent needs to be zero.
+    edge_feats = get_edge_features(batch.pos, edge_index, None, False, None)
     for i in range(n_step):
         t = t.to(device).float()
-        x1_pred = net(x_noise, cond, t)
+        x1_pred = net(node_feats, edge_index, edge_feats)
         x1_pred = torus_wrap(x1_pred)
         if i < n_step - 1:
             t_next = schedule[i + 1].expand(B)
@@ -102,14 +118,10 @@ def evaluate(net, device, n_steps):
     chi_mask_list = []
     for batch in test_dl:
         batch = batch.to(device)
-        cond_graph = protein_graph_conditioning(batch)
-        cond = cond_graph[batch.batch]
-        print(batch.chi_mask)
-        print(batch.aa_onehot)
         if n_steps == 1:
-            pred = sample_1step(net, cond, device)  #pred: [N, 4] where N = batch_size * 512(num of residues, invalid + valid, in each protein)
+            pred = sample_1step(net, device, batch)  #pred: [N, 4] where N = batch_size * 512(num of residues, invalid + valid, in each protein)
         else:
-            pred = sample_nstep(net, cond, device, n_step=n_steps)
+            pred = sample_nstep(net, device, batch, n_step=n_steps)
         x_wrapped = (batch.chi + math.pi) % (2 * math.pi)
         pred_list.append(pred.cpu())  #pred_list: [num_proteins, N, 4]
         true_list.append(x_wrapped.cpu())  #true_list: [num_proteins, N, 4]

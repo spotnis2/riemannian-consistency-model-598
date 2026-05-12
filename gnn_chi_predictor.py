@@ -68,14 +68,15 @@ class GNNChiPredictor(nn.Module):
         self.edge_layers = nn.ModuleList([EdgeLayer(hidden, edge_in, hidden) for _ in range(n_layers)])
         self.node_layers = nn.ModuleList([NodeLayer(hidden) for _ in range(n_layers)])
 
-        # Output: sin and cos of each of 4 chi angles = 8 values
+        # Output: four real values per residue - tangent components on T^4 
         self.output_mlp = nn.Sequential(
             nn.Linear(hidden, hidden // 2),
             nn.SiLU(),
-            nn.Linear(hidden // 2, 8),  # 4 sin + 4 cos
+            nn.Linear(hidden // 2, 4),  # 4 sin + 4 cos
         )
 
     def forward(self, node_feat, edge_index, edge_attr):
+        #has to CHANGE - because you need to output vf, not the actual angles.
         N = node_feat.shape[0]
         h = self.node_embed(node_feat)
         e = self.edge_embed(edge_attr)
@@ -85,17 +86,17 @@ class GNNChiPredictor(nn.Module):
             h   = nl(h, msg, edge_index, N)
 
         out = self.output_mlp(h)  # (N, 8)
-        sin_pred = out[:, :4]     # (N, 4)
-        cos_pred = out[:, 4:]     # (N, 4)
+        # sin_pred = out[:, :4]     # (N, 4)
+        # cos_pred = out[:, 4:]     # (N, 4)
 
-        # Normalize to unit circle
-        norm = torch.sqrt(sin_pred**2 + cos_pred**2 + 1e-8)
-        sin_pred = sin_pred / norm
-        cos_pred = cos_pred / norm
+        # # Normalize to unit circle
+        # norm = torch.sqrt(sin_pred**2 + cos_pred**2 + 1e-8)
+        # sin_pred = sin_pred / norm
+        # cos_pred = cos_pred / norm
 
         # Convert to angles in [0, 2pi]
-        angles = torch.atan2(sin_pred, cos_pred) % (2 * 3.14159265358979)
-        return angles  # (N, 4)
+        # angles = torch.atan2(sin_pred, cos_pred) % (2 * 3.14159265358979)
+        return out  # (N, 4)
 
 
 def build_graph(bb, bb_mask, aa_onehot, bb_dihedral, k=K_NEIGHBORS, device='cuda'):

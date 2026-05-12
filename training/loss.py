@@ -8,6 +8,8 @@ from training.manifolds import get_manifold
 from flowpacker.models.equiformer_v2.equiformer_v2 import PositionalEncodings
 from flowpacker.dataset_cluster import get_edge_features
 
+_loss_debug_calls = 0
+
 def clip_jvp(jvp: torch.Tensor, max_jvp_norm) -> torch.Tensor:
     if max_jvp_norm is None:
         return jvp
@@ -57,7 +59,7 @@ class ConsistencyLoss:
     def construct_gnn_node_features(self, batch, t, xt):
         node_feats = torch.cat([batch.aa_onehot, batch.bb_dihedral.sin(), batch.bb_dihedral.cos()], dim=-1) #[N, 27]
         t_for_embed = t.view(-1, 1) #[N, 1]
-        t_embed = self.t_embedder(t_for_embed) #[N, 32]
+        t_embed = self.t_embedder(t_for_embed) #[N, 32] (this is how its done in equiformer for flowpacker)
         node_feats = torch.cat([t_embed, xt, node_feats], dim=-1) #[N, 32 + 4 + 27]
         return node_feats
 
@@ -72,7 +74,7 @@ class ConsistencyLoss:
         xt, vf = self.manifold.vecfield(n, x_wrapped, t) #is this properly handling the  torus?
         if self.distillation:
             with torch.no_grad():
-                vf = self.teacher_model(t.unsqueeze(-1), xt, batch)
+                vf = self.teacher_model(t.unsqueeze(-1), xt, batch) #xt is (0, 2pi) here; does it need to be (-pi, pi) to get the correct vf?
         vf = vf * x_mask #target vector field
         xt = xt * x_mask 
         # Here, we need to modify the tangent vector with the Jacobian to account for the potential coordinate transform.
@@ -105,6 +107,7 @@ class ConsistencyLoss:
         # pred_vf, dvf = torch.func.jvp(net, (xt, t), tangents)
        
         dvf = dvf.detach()
+        pred_vf = pred_vf * x_mask
         pred_vf_detach = pred_vf.detach()
         u = (1 - t.unsqueeze(-1)) * pred_vf
         pred_x1 = self.manifold.exp(xt, u)
@@ -131,6 +134,9 @@ class ConsistencyLoss:
             loss = self.manifold.inner_with_mask(
                 (pred_vf.detach() - pred_vf + g_normed), g_normed, xt, x_mask
             ) * (t / (1 - t)).unsqueeze(-1).square()
+
+
+
         return loss
 
 class DiscreteConsistencyLoss:
