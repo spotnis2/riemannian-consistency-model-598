@@ -201,7 +201,6 @@ def training_loop(
                 #conditioning function
                 cond_graph = protein_graph_conditioning(batch) 
                 cond = cond_graph[batch.batch]
-                print("COND SHAPE", cond.shape)
                 loss = loss_fn(net=ddp, x=batch.chi, x_mask=batch.chi_mask, cond=cond, batch=batch, iter_steps=int(cur_nimg // batch_size))
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()

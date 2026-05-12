@@ -50,8 +50,8 @@ class PositionalEncodings(torch.nn.Module):
             torch.arange(0, self.num_embeddings, 2, dtype=torch.float32)
             * -(np.log(10000.0) / self.num_embeddings)
         ).to(d)
-        angles = d * frequency.view((1,-1))
-        E = torch.cat((torch.cos(angles), torch.sin(angles)), -1)
+        angles = d * frequency.view((1,-1)) #[N, 1] * [1, 32] = [N, 32]
+        E = torch.cat((torch.cos(angles), torch.sin(angles)), -1) #[N, 64]
         return E
 
 class EquiformerV2(nn.Module):

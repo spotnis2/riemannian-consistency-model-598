@@ -124,7 +124,7 @@ class FlowPrecond(torch.nn.Module):
         self.in_channels = in_channels
         #change to GNN model
         #self.model = MPModel(in_channels, **model_kwargs)
-        self.model = GNNChiPredictor(node_in=63, edge_in=65, hidden=256, n_layers=6)
+        self.model = GNNChiPredictor(node_in=95, edge_in=65, hidden=256, n_layers=6)
 
     def forward(self, node_feats, edge_index, edge_feats):
         F_x = self.model(node_feats, edge_index, edge_feats)

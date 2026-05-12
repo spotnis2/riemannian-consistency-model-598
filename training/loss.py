@@ -58,8 +58,10 @@ class ConsistencyLoss:
 
     def construct_gnn_node_features(self, batch, t, xt):
         node_feats = torch.cat([batch.aa_onehot, batch.bb_dihedral.sin(), batch.bb_dihedral.cos()], dim=-1) #[N, 27]
+        # print("INITIAL NODE FEATS SHAPE, ", node_feats.shape)
         t_for_embed = t.view(-1, 1) #[N, 1]
-        t_embed = self.t_embedder(t_for_embed) #[N, 32] (this is how its done in equiformer for flowpacker)
+        t_embed = self.t_embedder(t_for_embed) #[N, 32]
+        # print("T_EMB SHAPE ", t_embed.shape)
         node_feats = torch.cat([t_embed, xt, node_feats], dim=-1) #[N, 32 + 4 + 27]
         return node_feats
 

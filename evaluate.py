@@ -7,7 +7,6 @@ from flowpacker.dataset_cluster import get_dataloader, get_edge_features
 from pathlib import Path
 from flowpacker.models.equiformer_v2.equiformer_v2 import PositionalEncodings
 
-_eval_debug_batches = 0
 def protein_graph_conditioning(batch):
         bb_dihedrals, pos, aa_onehot, aa_m = batch.bb_dihedral, batch.pos, batch.aa_onehot, batch.aa_mask.float()
 
@@ -71,22 +70,25 @@ def sample_1step(net, device, batch, eps=0.05):
 
     # RCM network expects [B, 1, chi_dim]
 
-    x_noise = torch.rand(B, 1, 4, device=device) * 2 * math.pi
+    x_noise = torch.rand(B, 4, device=device) * 2 * math.pi
     t = torch.full((B,), eps, device=device)
 
+    node_feats = construct_gnn_node_features(batch, t, x_noise)
     edge_index = batch.edge_index #idk, I think in the flowpacker repo, they reconstruct this, but with virtual C_beta positions instead?
     # this is not dependent on xt or t. the tangent needs to be zero.
     edge_feats = get_edge_features(batch.pos, edge_index, None, False, None)
 
     out = net(node_feats, edge_index, edge_feats)
+
     direct = torus_wrap(out.squeeze(1))
     x_noise_2d = x_noise.squeeze(1)
     rcm = torus_wrap(x_noise_2d + (1.0 - eps) * out.squeeze(1))
 
+
 def sample_nstep(net, device, batch, n_step=5, eps=0.05):
 
     B = batch.chi.shape[0]
-    x_noise = torch.rand(B, 1, 4, device=device) * 2 * math.pi
+    x_noise = torch.rand(B, 4, device=device) * 2 * math.pi
     t = torch.ones((B,), device=device)
     schedule = np.linspace(eps, 1.0, n_step+1)
     schedule = torch.tensor(schedule)

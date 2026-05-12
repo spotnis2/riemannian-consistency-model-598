@@ -338,7 +338,6 @@ class ProteinDataset(Dataset):
                  pos=coords, edge_attr=edge_feat, aa_mask=aa_mask, bb_dihedral=bb_dihedral, chi=chi_angles,
                     chi_alt=chi_alt_angles, chi_mask=chi_mask, atom_mask=atom_mask, chi_alt_mask=chi_alt_mask,
                     atom_type=atom_type, chain_id=chain_id, res_id=res_id, icode=icode)
-        print(data.num_nodes)
         return data
 
     def __len__(self):
